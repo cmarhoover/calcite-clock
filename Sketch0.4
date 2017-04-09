@@ -1,0 +1,252 @@
+/*******************************************************************
+This sketch is for the Arduino controlled Calcite Clock by Caleb Marhoover,
+and has been adapted from projects by Steve De Domenico and Andy Doro.
+Adafruit's Neopixels are used for both the hour and minute hands.
+
+www.calebmarhoover.com
+
+*********************************************************************/
+
+#include <Time.h>
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h> // Adafruit library for LED rings
+#include "RTClib.h"  // rtc library for clock
+
+#include <Adafruit_GPS.h>
+#include <SoftwareSerial.h>
+SoftwareSerial Serial1(3, 2);
+Adafruit_GPS GPS(&Serial1);
+
+// Set GPSECHO to 'false' to turn off echoing the GPS data to the Serial console
+// Set to 'true' if you want to debug and listen to the raw GPS sentences
+#define GPSECHO false
+
+// this keeps track of whether we're using the interrupt
+// off by default!
+boolean usingInterrupt = false;
+
+RTC_DS1307 RTC;
+DateTime Clock;
+
+Adafruit_NeoPixel strip1 = Adafruit_NeoPixel(60, 10, NEO_GRB + NEO_KHZ800); // Hours hand
+Adafruit_NeoPixel strip2 = Adafruit_NeoPixel(60, 9, NEO_GRB + NEO_KHZ800); // Minutes hand
+
+long interval = 50;
+long previousMillis = 0;
+
+// RGB
+const int HrR = 255; // Sets the colours for each hand
+const int HrG = 255;
+const int HrB = 255;
+const int MinR = 255;
+const int MinG = 255;
+const int MinB = 255;
+const int Light = 3; // Light sensor on analog pin 3
+int val = 0; // Used to alter brightness of each ring based on ambient light value
+
+byte hourval, minuteval;
+
+byte pixelColorRed, pixelColorGreen, pixelColorBlue; // holds color values
+
+void setup() {
+
+  // connect at 115200 so we can read the GPS fast enough and echo without dropping chars
+  // also spit it out
+  Serial.begin(115200);
+  Serial.println("Adafruit GPS library basic test!");
+
+  // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
+  GPS.begin(9600);
+
+  // uncomment this line to turn on RMC (recommended minimum) and GGA (fix data) including altitude
+  GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
+  // uncomment this line to turn on only the "minimum recommended" data
+  //GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCONLY);
+  // For parsing data, we don't suggest using anything but either RMC only or RMC+GGA since
+  // the parser doesn't care about other sentences at this time
+
+  // Set the update rate
+  GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);   // 1 Hz update rate
+  // For the parsing code to work nicely and have time to sort thru the data, and
+  // print it out we don't suggest using anything higher than 1 Hz
+
+  delay(1000);
+  // Ask for firmware version
+  Serial1.println(PMTK_Q_RELEASE);
+
+  Wire.begin();
+  RTC.begin();
+  strip1.begin();
+  strip2.begin();
+
+  // startup sequence
+
+  colorWipe(strip1.Color(25, 25, 25), 15),(strip2);
+  colorWipe(strip1.Color(0, 0, 0), 15),(strip2);
+
+  strip1.show(); // Initialize all pixels to 'off'
+  strip2.show(); // Initialize all pixels to 'off'
+  RTC.adjust(DateTime(__DATE__,__TIME__)); // rtc collects system time on script load
+}
+
+uint32_t timer = millis();
+
+void loop() {
+{
+  // read data from the GPS in the 'main loop'
+  char c = GPS.read();
+  // if you want to debug, this is a good time to do it!
+  if (GPSECHO)
+      if (c) Serial.print(c);
+
+  // if a sentence is received, we can check the checksum, parse it...
+  if (GPS.newNMEAreceived()) {
+    // a tricky thing here is if we print the NMEA sentence, or data
+    // we end up not listening and catching other sentences!
+    // so be very wary if using OUTPUT_ALLDATA and trytng to print out data
+    Serial.println(GPS.lastNMEA());   // this also sets the newNMEAreceived() flag to false
+
+    if (!GPS.parse(GPS.lastNMEA()))   // this also sets the newNMEAreceived() flag to false
+      return;  // we can fail to parse a sentence in which case we should just wait for another
+  }
+
+  // if millis() or timer wraps around, we'll just reset it
+  if (timer > millis())  timer = millis();
+
+  // approximately every 2 seconds or so, print out the current stats
+  if (millis() - timer > 2000) {
+    timer = millis(); // reset the timer
+
+    Serial.print("\nTime: ");
+    Serial.print(GPS.hour, DEC); Serial.print(':');
+    Serial.print(GPS.minute, DEC); Serial.print(':');
+    Serial.print(GPS.seconds, DEC); Serial.print('.');
+    Serial.println(GPS.milliseconds);
+    Serial.print("Date: ");
+    Serial.print(GPS.day, DEC); Serial.print('/');
+    Serial.print(GPS.month, DEC); Serial.print("/20");
+    Serial.println(GPS.year, DEC);
+    Serial.print("Fix: "); Serial.print((int)GPS.fix);
+    Serial.print(" quality: "); Serial.println((int)GPS.fixquality);
+    if (GPS.fix) {
+      Serial.print("Location: ");
+      Serial.print(GPS.latitude, 4); Serial.print(GPS.lat);
+      Serial.print(", ");
+      Serial.print(GPS.longitude, 4); Serial.println(GPS.lon);
+
+      Serial.print("Speed (knots): "); Serial.println(GPS.speed);
+      Serial.print("Angle: "); Serial.println(GPS.angle);
+      Serial.print("Altitude: "); Serial.println(GPS.altitude);
+      Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
+    }
+
+  unsigned long currentMillis = millis(); // Condition to ensure LED sweep occurs only once
+
+    val = analogRead(Light); // Sets the ring brightness from 1 to 25, based on ambient light
+    val = map(val, 50, 1000, 1, 35);
+    val = constrain(val, 3, 35);
+
+  Clock = RTC.now();
+  DateTime now = RTC.now();
+  hourval = Clock.hour();
+  minuteval = Clock.minute();
+  if(hourval > 11) hourval -= 12; // This clock is 12 hour, if 13-23, convert to 0-11
+  hourval = (hourval*60 + minuteval) / 12;  //each red dot represent 24 minutes.
+
+      // arc mode
+  for(uint8_t i=0; i<strip1.numPixels(); i++) {
+
+   if (i <= hourval) {
+    pixelColorRed = 255;
+    pixelColorGreen = 255;
+    pixelColorBlue = 255;
+  }
+  else {
+    pixelColorRed = 0;
+    pixelColorGreen = 0;
+    pixelColorBlue = 0;
+  }
+  strip1.setPixelColor(i, strip1.Color(pixelColorRed, pixelColorGreen, pixelColorBlue));
+  }
+
+  for(uint8_t i=0; i<strip2.numPixels(); i++) {
+
+  if (i <= minuteval) {
+    pixelColorRed = 255;
+    pixelColorGreen = 255;
+    pixelColorBlue = 255;
+  }
+  else {
+    pixelColorRed = 0;
+    pixelColorGreen = 0;
+    pixelColorBlue = 0;
+  }
+
+  strip2.setPixelColor(i, strip2.Color(pixelColorRed, pixelColorGreen, pixelColorBlue));
+  }
+
+ strip1.setBrightness(val); // Sets the brightness for the hours hand
+ strip2.setBrightness(val); // Sets the brightness for the minutes and seconds hands
+
+ strip1.setPixelColor(hourval,HrR,HrG,HrB); // Sets the color for the hours hand
+ strip2.setPixelColor(minuteval,MinR,MinG,MinB); // Sets the color for the hours hand
+
+ if (now.hour() != 0 && now.minute() == 0 && now.second() == 0)
+    {
+      for (int i=1;i<60; i++) { // Sweep On
+         strip2.setPixelColor(i,255,255,255);
+         strip2.show();
+  delay(20);}
+  //delay(1000);
+  for (int i=1;i<60; i++) { // Sweep Off
+         strip2.setPixelColor(i,0,0,0);
+         strip2.show();
+  delay(20);}
+     }
+
+ if (now.hour() == 0 && now.minute() == 0 && now.second() == 0)
+    {
+      for (int i=1;i<60; i++) { // Sweep On
+         strip1.setPixelColor(i,255,255,255);
+         strip1.show();
+         strip2.setPixelColor(i,255,255,255);
+         strip2.show();
+  delay(20);}
+  //delay(1000);
+  for (int i=1;i<60; i++) { // Sweep Off
+         strip1.setPixelColor(i,0,0,0);
+         strip1.show();
+         strip2.setPixelColor(i,0,0,0);
+         strip2.show();
+  delay(20);}
+     }
+
+    for (int i=0; i<65; i=i+5) // This illuminates every 5 minute interval
+     {
+
+   if (hourval == i) { // Makes the hour hand overwrite the 5 minute interval
+      strip1.setPixelColor(i,HrR,HrG,HrB);}
+      else {strip1.setPixelColor(i,65,65,65);
+    strip1.setPixelColor(hourval,HrR,HrG,HrB);} // Creates the hour hand
+
+    if (Clock.minute() == i) { // Makes the minute hand overwrite the 5 minute interval
+      strip2.setPixelColor(i,MinR,MinG,MinB);}
+      else {strip2.setPixelColor(i,65,65,65);
+    strip2.setPixelColor(Clock.minute(), MinR,MinG,MinB);} // Creates the minute hand
+
+    }
+
+    strip1.show();
+    strip2.show();
+  }
+}
+}
+  // Fill the dots one after the other with a color
+void colorWipe(uint32_t c, uint8_t wait) {
+  for(uint16_t i=0; i<strip1.numPixels(); i++) {
+    strip1.setPixelColor(i, c);
+    strip1.show();
+    strip2.setPixelColor(i, c);
+    strip2.show();
+    delay(wait); }
+}
