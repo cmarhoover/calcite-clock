@@ -1,0 +1,182 @@
+/*******************************************************************
+This sketch is for the Arduino controlled Calcite Clock by Caleb Marhoover,
+and has been adapted from projects by Steve De Domenico and Andy Doro.
+Adafruit's Neopixels are used for both the hour and minute hands.
+
+www.calebmarhoover.com
+
+*********************************************************************/
+
+#include <Wire.h>
+#include <Adafruit_NeoPixel.h> // Adafruit library for LED rings
+#include "RTClib.h" // rtc library for clock
+
+RTC_DS1307 RTC;
+DateTime Clock;
+
+Adafruit_NeoPixel strip1 = Adafruit_NeoPixel(60, 10, NEO_GRB + NEO_KHZ800); // Hours hand
+Adafruit_NeoPixel strip2 = Adafruit_NeoPixel(60, 9, NEO_GRB + NEO_KHZ800); // Minutes hand
+
+long interval = 1000;
+unsigned long previousMillis = 0;
+
+// RGB
+const int HrR = 255; // Sets the colours for each hand
+const int HrG = 255;
+const int HrB = 255;
+const int MinR = 255;
+const int MinG = 255;
+const int MinB = 255;
+const int Light = 3; // Light sensor on analog pin 3
+int val = 0; // Used to alter brightness of each ring based on ambient light value
+
+byte hourval, minuteval;
+
+byte pixelColorRed, pixelColorGreen, pixelColorBlue; // holds color values
+
+void setup() {
+
+  Serial.begin(57600); // Serial support for debugging
+  Wire.begin();
+  RTC.begin();
+  strip1.begin();
+  strip2.begin();
+
+  // startup sequence
+
+  colorWipe(strip1.Color(25, 25, 25), 15),(strip2);
+  colorWipe(strip1.Color(0, 0, 0), 15),(strip2);
+
+  strip1.show(); // Initialize all pixels to 'off'
+  strip2.show(); // Initialize all pixels to 'off'
+  RTC.adjust(DateTime(__DATE__,__TIME__)); // rtc collects system time on script load
+  Serial.println("Liftoff");
+}
+
+void loop() {
+
+  unsigned long currentMillis = millis(); // Condition to ensure LED sweep occurs only once
+
+  val = analogRead(Light); // Sets the ring brightness from 1 to 25, based on ambient light
+  val = map(val, 50, 1000, 1, 35);
+  val = constrain(val, 3, 35);
+
+  Clock = RTC.now();
+  DateTime now = RTC.now();
+  hourval = Clock.hour();
+  minuteval = Clock.minute();
+  if(hourval > 11) hourval -= 12; // This clock is 12 hour, if 13-23, convert to 0-11
+  hourval = (hourval*60 + minuteval) / 12; //each red dot represent 24 minutes.
+
+  if(currentMillis - previousMillis > interval) {
+  previousMillis = currentMillis;
+  Serial.print(now.year(), DEC);
+  Serial.print('/');
+  Serial.print(now.month(), DEC);
+  Serial.print('/');
+  Serial.print(now.day(), DEC);
+  Serial.print(' ');
+  Serial.print(now.hour(), DEC);
+  Serial.print(':');
+  Serial.print(now.minute(), DEC);
+  Serial.print(':');
+  Serial.print(now.second(), DEC);
+  Serial.println();
+  }
+
+  // arc mode
+  for(uint8_t i=0; i<strip1.numPixels(); i++) {
+
+  if (i <= hourval) {
+  pixelColorRed = 255;
+  pixelColorGreen = 255;
+  pixelColorBlue = 255;
+  }
+  else {
+  pixelColorRed = 0;
+  pixelColorGreen = 0;
+  pixelColorBlue = 0;
+  }
+  strip1.setPixelColor(i, strip1.Color(pixelColorRed, pixelColorGreen, pixelColorBlue));
+  }
+
+  for(uint8_t i=0; i<strip2.numPixels(); i++) {
+
+  if (i <= minuteval) {
+  pixelColorRed = 255;
+  pixelColorGreen = 255;
+  pixelColorBlue = 255;
+  }
+  else {
+  pixelColorRed = 0;
+  pixelColorGreen = 0;
+  pixelColorBlue = 0;
+  }
+
+  strip2.setPixelColor(i, strip2.Color(pixelColorRed, pixelColorGreen, pixelColorBlue));
+  }
+
+ strip1.setBrightness(val); // Sets the brightness for the hours hand
+ strip2.setBrightness(val); // Sets the brightness for the minutes and seconds hands
+
+ strip1.setPixelColor(hourval,HrR,HrG,HrB); // Sets the color for the hours hand
+ strip2.setPixelColor(minuteval,MinR,MinG,MinB); // Sets the color for the hours hand
+
+ if (now.hour() != 0 && now.minute() == 0 && now.second() == 0)
+  {
+  for (int i=1;i<60; i++) { // Sweep On
+  strip2.setPixelColor(i,255,255,255);
+  strip2.show();
+  delay(20);}
+  //delay(1000);
+  for (int i=1;i<60; i++) { // Sweep Off
+  strip2.setPixelColor(i,0,0,0);
+  strip2.show();
+  delay(20);}
+  }
+
+ if (now.hour() == 0 && now.minute() == 0 && now.second() == 0)
+  {
+  for (int i=1;i<60; i++) { // Sweep On
+  strip1.setPixelColor(i,255,255,255);
+  strip1.show();
+  strip2.setPixelColor(i,255,255,255);
+  strip2.show();
+  delay(20);}
+  //delay(1000);
+  for (int i=1;i<60; i++) { // Sweep Off
+  strip1.setPixelColor(i,0,0,0);
+  strip1.show();
+  strip2.setPixelColor(i,0,0,0);
+  strip2.show();
+  delay(20);}
+  }
+
+  for (int i=0; i<65; i=i+5) // This illuminates every 5 minute interval
+  {
+
+  if (hourval == i) { // Makes the hour hand overwrite the 5 minute interval
+  strip1.setPixelColor(i,HrR,HrG,HrB);}
+  else {strip1.setPixelColor(i,65,65,65);
+  strip1.setPixelColor(hourval,HrR,HrG,HrB);} // Creates the hour hand
+
+  if (Clock.minute() == i) { // Makes the minute hand overwrite the 5 minute interval
+  strip2.setPixelColor(i,MinR,MinG,MinB);}
+  else {strip2.setPixelColor(i,65,65,65);
+  strip2.setPixelColor(Clock.minute(), MinR,MinG,MinB);} // Creates the minute hand
+
+  }
+
+  strip1.show();
+  strip2.show();
+}
+
+  // Fill the dots one after the other with a color
+void colorWipe(uint32_t c, uint8_t wait) {
+  for(uint16_t i=0; i<strip1.numPixels(); i++) {
+  strip1.setPixelColor(i, c);
+  strip1.show();
+  strip2.setPixelColor(i, c);
+  strip2.show();
+  delay(wait); }
+}
